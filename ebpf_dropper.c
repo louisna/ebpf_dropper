@@ -20,6 +20,11 @@
 #endif
 
 
+//-DIP6_A1_A=0x2042002200000000 -DIP6_A1_B=0x0000000000000002 -DIP6_A2_A=0xfc00000000000000 -DIP6_A2_B=0x000000000000000a
+//#define IP6_A1_A 0x2042002200000000
+//#define IP6_A1_B 0x0000000000000002
+//#define IP6_A2_A 0xfc00000000000000
+//#define IP6_A2_B 0x000000000000000a
 
 // from uapi/linux/ip.h
 struct iphdr {
@@ -44,7 +49,35 @@ struct iphdr {
 	/*The options start here. */
 };
 
+#if __UAPI_DEF_IN6_ADDR
+struct in6_addr {
+	union {
+		__u8		u6_addr8[16];
+#if __UAPI_DEF_IN6_ADDR_ALT
+		__be16		u6_addr16[8];
+		__be32		u6_addr32[4];
+#endif
+	} in6_u;
+#define s6_addr			in6_u.u6_addr8
+#if __UAPI_DEF_IN6_ADDR_ALT
+#define s6_addr16		in6_u.u6_addr16
+#define s6_addr32		in6_u.u6_addr32
+#endif
+};
+#endif /* __UAPI_DEF_IN6_ADDR */
 
+struct ip6_t {
+  __u32        ver:4;
+  __u32        priority:8;
+  __u32        flow_label:20;
+  __u16      payload_len;
+  __u8       next_header;
+  __u8       hop_limit;
+  __u64  src_hi;
+  __u64  src_lo;
+  __u64  dst_hi;
+  __u64  dst_lo;
+} __attribute__((packed));
 
 
 // from uapi/linux/udp.h
@@ -116,6 +149,11 @@ struct bpf_elf_map SEC("maps") map = {
         .pinning = PIN_NONE,
         .max_elem = 3,
 };
+
+typedef struct {
+    __u64 ip6_a;
+    __u64 ip6_b;
+} my_ipv6_t;
 
 typedef enum state {
     // 0 is reserved value
@@ -384,6 +422,55 @@ __attribute__((always_inline)) __u32 get_daddr(struct __sk_buff *skb) {
     return (b1 + b2 + b3 + b4);
 }
 
+__attribute__((always_inline)) void set_saddr_ipv6(struct __sk_buff *skb, my_ipv6_t *addr) {
+    struct ip6_t *iphdr = (struct ip6_t *) skb + ETH_HLEN;
+    // Load IPv6 byte per byte
+    __u64 a1 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi)) << 56;
+    __u64 a2 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 1) << 48;
+    __u64 a3 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 2) << 40;
+    __u64 a4 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 3) << 32;
+    __u64 a5 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 4) << 24;
+    __u64 a6 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 5) << 16;
+    __u64 a7 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 6) << 8;
+    __u64 a8 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_hi) + 7);
+    addr->ip6_a = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;
+
+    a1 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo)) << 56;
+    a2 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 1) << 48;
+    a3 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 2) << 40;
+    a4 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 3) << 32;
+    a5 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 4) << 24;
+    a6 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 5) << 16;
+    a7 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 6) << 8;
+    a8 = load_byte(skb, ETH_HLEN + offsetof(struct ip6_t, src_lo) + 7);
+    addr->ip6_b = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;
+}
+
+__attribute__((always_inline)) void set_daddr_ipv6(struct __sk_buff *skb, my_ipv6_t *addr) {
+    struct ip6_t *iphdr = (struct ip6_t *) skb + ETH_HLEN;
+    __u64 a = load_byte(skb, ETH_HLEN + 8 + 16);
+    // Load IPv6 byte per byte
+    __u64 a1 = load_byte(skb, ETH_HLEN + 8 + 16) << 56;
+    __u64 a2 = load_byte(skb, ETH_HLEN + 8 + 16 + 1) << 48;
+    __u64 a3 = load_byte(skb, ETH_HLEN + 8 + 16 + 2) << 40;
+    __u64 a4 = load_byte(skb, ETH_HLEN + 8 + 16 + 3) << 32;
+    __u64 a5 = load_byte(skb, ETH_HLEN + 8 + 16 + 4) << 24;
+    __u64 a6 = load_byte(skb, ETH_HLEN + 8 + 16 + 5) << 16;
+    __u64 a7 = load_byte(skb, ETH_HLEN + 8 + 16 + 6) << 8;
+    __u64 a8 = load_byte(skb, ETH_HLEN + 8 + 16 + 7);
+    addr->ip6_a = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;
+
+    a1 = load_byte(skb, ETH_HLEN + 8 + 16 + 8) << 56;
+    a2 = load_byte(skb, ETH_HLEN + 8 + 16 + 9) << 48;
+    a3 = load_byte(skb, ETH_HLEN + 8 + 16 + 10) << 40;
+    a4 = load_byte(skb, ETH_HLEN + 8 + 16 + 11) << 32;
+    a5 = load_byte(skb, ETH_HLEN + 8 + 16 + 12) << 24;
+    a6 = load_byte(skb, ETH_HLEN + 8 + 16 + 13) << 16;
+    a7 = load_byte(skb, ETH_HLEN + 8 + 16 + 14) << 8;
+    a8 = load_byte(skb, ETH_HLEN + 8 + 16 + 15);
+    addr->ip6_b = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;
+}
+
 // returns the IP dest address as a 32 bits unsigned integer
 __attribute__((always_inline)) __u32 get_saddr(struct __sk_buff *skb) {
     struct iphdr *iphdr = (struct iphdr *) skb + ETH_HLEN;
@@ -498,6 +585,53 @@ __attribute__((always_inline)) int decision_function(struct __sk_buff *skb, __u1
 
 // use to drop a defined TCP packet sequence
 
+__attribute__((always_inline)) int drop_if_addrs_ipv6(struct __sk_buff *skb, my_ipv6_t *addr1, my_ipv6_t *addr2) {
+    my_ipv6_t dst;
+    set_daddr_ipv6(skb, &dst);
+    __u8 found = 0;
+
+    // Check first
+    bpf_debug("1==%u et 1==%u\n", dst.ip6_a == addr1->ip6_a, dst.ip6_b == addr1->ip6_b);
+    if (dst.ip6_a == addr1->ip6_a && dst.ip6_b == addr1->ip6_b) return 1;
+    if (dst.ip6_a == addr2->ip6_a && dst.ip6_b == addr2->ip6_b) return 1;
+
+    return 0;
+}
+
+__attribute__((always_inline)) int my_decision_function(struct __sk_buff *skb) {
+    my_ipv6_t src = {
+        .ip6_a = IP6_A1_A,
+        .ip6_b = IP6_A1_B,
+    };
+    my_ipv6_t dst = {
+        .ip6_a = IP6_A2_A,
+        .ip6_b = IP6_A2_B,
+    };
+    if (ALL_DROP(drop_if_addrs_ipv6(skb, &src, &dst))) {
+        if (GEMODEL)
+            return drop_if_gemodel(GEMODEL_P_PERCENTS_TIMES_100, GEMODEL_R_PERCENTS_TIMES_100, GEMODEL_K_PERCENTS_TIMES_100, GEMODEL_H_PERCENTS_TIMES_100);
+        else
+            return drop_if_random_with_proba(PROBA_percents_times_100);
+    }
+    return PASS;
+}
+
+__attribute__((always_inline)) int my_decision_function_drop_sequence(struct __sk_buff *skb) {
+    my_ipv6_t src = {
+        .ip6_a = IP6_A1_A,
+        .ip6_b = IP6_A1_B,
+    };
+    my_ipv6_t dst = {
+        .ip6_a = IP6_A2_A,
+        .ip6_b = IP6_A2_B,
+    };
+    if (drop_if_addrs_ipv6(skb, &src, &dst)) {
+        __u32 sequence[] = SEQUENCE;
+        return drop_packet_sequence(sequence, sizeof(sequence)/sizeof(__u32));
+    }
+    return PASS;
+}
+
 // this functions drops the packets 0, 3, 4, 8 and 10 from the TCP flow between IP1_TO_DROP and IP2_TO_DROP, on port PORT_TO_WATCH
 __attribute__((always_inline)) int decision_function_drop_sequence(struct __sk_buff *skb, __u16 protocol) {
     // to be completed by the user
@@ -515,9 +649,10 @@ SEC("action") int handle_ingress(struct __sk_buff *skb)
 {
     // to be completed by the user
     #if DROP_SEQUENCE
-    return decision_function_drop_sequence(skb, PROTOCOL_TO_WATCH);
+    return my_decision_function_drop_sequence(skb);
     #else
-    return decision_function(skb, PROTOCOL_TO_WATCH);
+    //return decision_function(skb, PROTOCOL_TO_WATCH);
+    return my_decision_function(skb);
     #endif
 }
 

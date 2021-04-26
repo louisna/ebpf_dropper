@@ -65,6 +65,7 @@ protocol = UDP if args.udp else TCP
 
 clang_args = "-DGEMODEL={} -DGEMODEL_P_PERCENTS={} -DGEMODEL_R_PERCENTS={} -DGEMODEL_K_PERCENTS={} " \
              "-DGEMODEL_H_PERCENTS={} -DPROBA_percents={} -DDROP_SEQUENCE={} -DSEQUENCE=\\{{{}\\}} -DSEED={} -DIP1_TO_DROP={} "\
+             "-DIP6_A1_A=0x2042002200000000 -DIP6_A1_B=0x0000000000000002 -DIP6_A2_A=0xfc00000000000000 -DIP6_A2_B=0x000000000000000a "\
              "-DIP2_TO_DROP={} -DPORT_TO_WATCH={} -DPROTOCOL_TO_WATCH={} -I{}"\
     .format(use_gemodel, args.P, args.R, args.K, args.H, args.P, drop_sequence, sequence, args.seed, ip_to_int(ips[0]), ip_to_int(ips[1]),
             args.port, protocol, args.headers)
