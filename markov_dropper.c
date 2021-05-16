@@ -4,9 +4,14 @@
 #include "bpf_helpers.h"
 
 #define ETH_HLEN 14
+
 #ifndef DROP_SEQUENCE
 #define SEQUENCE {}
 #define DROP_SEQUENCE 0
+#endif
+
+#ifndef DROP_UNIFORM
+#define DROP_UNIFORM 0
 #endif
 
 #ifndef SEQUENCE
@@ -69,11 +74,13 @@ typedef struct {
 } my_ipv6_t;
 
 typedef struct {
-    __u8 k;
-    __u8 d;
+    __u16 k;
+    __u16 d;
+    __u16 u;
     __u8 current_state;
     __u64 seed;
     __u32 intercepted;
+    __u64 bytes_received;
 } drop_markov_t;
 
 struct bpf_elf_map {
@@ -186,6 +193,8 @@ __attribute__((always_inline)) int drop_if_addrs_ipv6(struct __sk_buff *skb, my_
     // Check first
     //bpf_debug("--1==%u et 1==%u\n", dst.ip6_a == addr1->ip6_a, dst.ip6_b == addr1->ip6_b);
     //bpf_debug("1==%u et 1==%u\n", dst.ip6_a == addr2->ip6_a, dst.ip6_b == addr2->ip6_b);
+    //bpf_debug("En hexadecimal je cherche: %llx %llx\n", addr1->ip6_a, addr1->ip6_b);
+    //bpf_debug("Et j'ai: %llx %llx\n", dst.ip6_a, dst.ip6_b);
     if (dst.ip6_a == addr1->ip6_a && dst.ip6_b == addr1->ip6_b) return 1;
     if (dst.ip6_a == addr2->ip6_a && dst.ip6_b == addr2->ip6_b) return 1;
 
@@ -200,24 +209,71 @@ __attribute__((always_inline)) void update_markov_model(drop_markov_t *markov) {
     __u8 intercepted_first = 0;
     __u8 intercepted_after = 1;//markov->intercepted >= 1001;
     if (intercepted_first || intercepted_after) {
+        markov->bytes_received = 0;
         //bpf_debug("Intercepted=%u\n", markov->intercepted);
         markov->intercepted = 1;
-        if (markov->d >= 50) {
-            markov->d = 2;
-            --markov->k;
+        if (markov->d >= 500) {
+            markov->d = 0;
+            markov->k -= 10;
         } else {
-            ++markov->d;
+            markov->d += 100;
         }
 
-        if (markov->k < 90) {
-            markov->k = 90;
+        if (markov->k < 900) {
+            markov->k = 900;
             bpf_debug("Droper: /!\\ already in this state\n");
         }
         bpf_debug("Droper: updated the params to k=%d, d=%d\n", markov->k, markov->d);
     }
 }
 
-__attribute__((always_inline)) int update_markov_model_notify(struct __sk_buff *skb) {
+__attribute__((always_inline)) void update_markov_model_only_k(drop_markov_t *markov) {
+    markov->bytes_received = 0;
+    //bpf_debug("Intercepted=%u\n", markov->intercepted);
+    markov->intercepted = 1;
+    markov->k -= 5;
+
+    if (markov->k < 900) {
+        markov->k = 900;
+        bpf_debug("Droper: /!\\ already in this state\n");
+    }
+    bpf_debug("Droper: updated the params to k=%d, d=%d\n", markov->k, markov->d);
+}
+
+__attribute__((always_inline)) void update_markov_model_defined(drop_markov_t *markov) {
+    markov->bytes_received = 0;
+    markov->intercepted = 1;
+    if (markov->d >= 500) {
+        markov->d = 0;
+        if (markov->k == 990) {
+            markov->k = 960;
+        } else if (markov->k == 960) {
+            markov->k = 930;
+        } else if (markov->k == 930) {
+            markov->k = 900;
+        } else {
+            bpf_debug("Droper: /!\\ Already in this state");
+        }
+    } else {
+        markov->d += 20;
+    }
+    bpf_debug("Droper: updated the params to k=%d, d=%d\n", markov->k, markov->d);
+}
+
+__attribute__((always_inline)) int update_uniform_model(drop_markov_t *markov) {
+    markov->bytes_received = 0;
+    markov->intercepted = 1;
+    markov->u += 5;
+
+    if (markov->u > 150) {
+        markov->u = 150;
+        bpf_debug("Droper: /!\\ already in this state\n");
+    }
+    bpf_debug("Droper: updated the params of uniform to u=%u\n", markov->u);
+    return 0;
+}
+
+__attribute__((always_inline)) int update_model_notify(struct __sk_buff *skb) {
     if (notify_if_port(skb, 3333)) return 1;
     return 0;
 }
@@ -231,10 +287,17 @@ __attribute__((always_inline)) int drop_markov_model(struct __sk_buff *skb) {
         markov->k = K_MARKOV;
         markov->d = D_MARKOV;
         markov->seed = 42;
+        markov->bytes_received = 0;
     }
-    
-    if (update_markov_model_notify(skb)) {
-        update_markov_model(markov);
+
+    // Add the number of bytes of this packet to the total (removing the ETHERNET header)
+    //if (notify_if_port(skb, 1883))
+        markov->bytes_received += skb->len - 14;
+
+    if (update_model_notify(skb)) {
+        // Before updating, indicate the number of bytes received for this test
+        bpf_debug("Total received: %llu\n", markov->bytes_received);
+        update_markov_model_defined(markov);
         return DROP;
     }
 
@@ -249,24 +312,61 @@ __attribute__((always_inline)) int drop_markov_model(struct __sk_buff *skb) {
 
     /* Update the finite state machine */
     if (markov->current_state == 0) { // PASS state
-        if (next % 100 <= markov->k) { // Keep the symbol
+        if (next % 1000 < markov->k) { // Keep the symbol
             markov->current_state = 0;
             return PASS;
         } else {
             markov->current_state = 1;
-            bpf_debug("Drop intercepted #%d\n", markov->intercepted - 1);
+            //bpf_debug("Drop intercepted #%d\n", markov->intercepted - 1);
             return DROP;
         }
     } else {
-        if (next % 100 >= markov->d) { // Keep the symbol
+        if (next % 1000 >= markov->d) { // Keep the symbol
             markov->current_state = 0;
             return PASS;
         } else {
             markov->current_state = 1;
-            bpf_debug("Drop intercepted #%d\n", markov->intercepted - 1);
+            //bpf_debug("Drop intercepted #%d\n", markov->intercepted - 1);
             return DROP;
         }
     }
+}
+
+__attribute__((always_inline)) int drop_uniform(struct __sk_buff *skb) {
+    int k = 0;
+    drop_markov_t *markov = bpf_map_lookup_elem(&interceptionMap, &k);
+    if (!markov) return PASS;
+
+    if (markov->intercepted == 0) {
+        markov->seed = 42;
+        markov->u = U_UNIFORM;
+        markov->bytes_received = 0;
+    }
+
+    // Add the number of bytes of this packet to the total (removing the ETHERNET header)
+    markov->bytes_received += skb->len - 14;
+    
+    if (update_model_notify(skb)) {
+        // Before updating, indicate the number of bytes received for this test
+        bpf_debug("Total received: %llu\n", markov->bytes_received);
+        update_uniform_model(markov);
+        return DROP;
+    }
+
+    int is_to_drop = 0;
+    __u64 next = my_random_generator(markov->seed);
+
+    /* Update the intercepted value */
+    ++markov->intercepted;
+
+    /* The current value will serve as the seed for next call */
+    markov->seed = next;
+
+    if (next % 1000 <= markov->u) {
+        //bpf_debug("Drop uniform packete\n");
+        return DROP;
+    }
+    return PASS;
 }
 
 __attribute__((always_inline)) int drop_sequence(__u32 sequence[], uint8_t len) {
@@ -309,6 +409,8 @@ __attribute__((always_inline)) int my_decision_function(struct __sk_buff *skb) {
         #if DROP_SEQUENCE
          __u32 sequence[] = SEQUENCE;
         return drop_sequence(sequence, sizeof(sequence) / sizeof(__u32));
+        #elif DROP_UNIFORM
+        return drop_uniform(skb);
         #else
         return drop_markov_model(skb);
         #endif
