@@ -297,7 +297,7 @@ __attribute__((always_inline)) int drop_markov_model(struct __sk_buff *skb) {
         bpf_debug("Total received packets: %u bytes: %u\n", markov->intercepted, markov->bytes_received);
         markov->bytes_received = 0;
         markov->intercepted = 0;
-        markov->seed = 0;
+        markov->seed = 42;
     }
 
     int is_to_drop = 0;
